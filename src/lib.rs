@@ -119,6 +119,50 @@ impl Default for ConstraintBlock {
 /// | Content     | `question`, `answer`, `tags`, `anchors`          |
 /// | Attention   | `weight`, `use_count`, `active`, `last_used_tick`|
 /// | Constraints | `constraints` (`ConstraintBlock`)                |
+/// | Taxonomy    | `domain`, `category` (from ct-lab Tile Taxonomy)   |
+
+/// Tile domain — what kind of knowledge this tile contains.
+/// Extended from 6 original types to 14 based on ct-lab research.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TileDomain {
+    // Original 6
+    Knowledge,
+    Experience,
+    Constraint,
+    Instinct,
+    Social,
+    Meta,
+    // ct-lab extensions (Tile Taxonomy)
+    NegativeSpace,  // What NOT to do — "don't add logging to find leaks"
+    Boundary,       // Handoffs, transitions — "what goes wrong at dev→prod"
+    Diagnostic,     // HOW the answer was found, not what — diagnostic process
+    Taste,          // "Something feels wrong but I can't explain why"
+    Temporal,       // Advice with expiration — "best model until 2026-07"
+    Analogy,        // Cross-domain explanations — "debugging = ER trauma bay"
+    Autopsy,        // Post-mortem analysis — what went wrong and why
+}
+
+impl Default for TileDomain {
+    fn default() -> Self { TileDomain::Knowledge }
+}
+
+impl TileDomain {
+    /// Check if this domain is a ct-lab extended category.
+    pub fn is_extended(&self) -> bool {
+        matches!(self, TileDomain::NegativeSpace | TileDomain::Boundary | TileDomain::Diagnostic |
+            TileDomain::Taste | TileDomain::Temporal | TileDomain::Analogy | TileDomain::Autopsy)
+    }
+}
+
+/// Temporal validity for tiles with expiration dates (Temporal domain).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TemporalValidity {
+    pub valid_from: String,    // ISO date or description
+    pub valid_until: Option<String>, // None = still valid
+    pub check_again: String,   // When to re-evaluate
+    pub half_life_estimate: Option<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Tile {
     // --- Core ---
@@ -128,6 +172,8 @@ pub struct Tile {
     pub confidence: f64,
     /// Where this tile came from.
     pub provenance: Provenance,
+    /// Tile domain — what kind of knowledge (from ct-lab Tile Taxonomy).
+    pub domain: TileDomain,
 
     // --- Content ---
     /// The question or prompt this tile answers.
@@ -164,6 +210,7 @@ impl Tile {
             id: generate_id("tile"),
             confidence: 0.5,
             provenance,
+            domain: TileDomain::default(),
             question: question.into(),
             answer: answer.into(),
             tags: Vec::new(),
@@ -724,5 +771,73 @@ mod tests {
         let mut t = make_tile("q", "a");
         t.record_use(0.7);
         assert!(t.active);
+    }
+
+    // --- Tile Taxonomy Tests (ct-lab) ---
+
+    #[test]
+    fn test_tile_domain_default() {
+        let t = make_tile("q", "a");
+        assert_eq!(t.domain, TileDomain::Knowledge);
+    }
+
+    #[test]
+    fn test_tile_domain_extended() {
+        let mut t = make_tile("q", "a");
+        t.domain = TileDomain::NegativeSpace;
+        assert!(t.domain.is_extended());
+        assert!(!TileDomain::Knowledge.is_extended());
+        assert!(!TileDomain::Meta.is_extended());
+    }
+
+    #[test]
+    fn test_tile_domain_all_variants() {
+        // All 14 domains are constructible
+        let domains = [
+            TileDomain::Knowledge, TileDomain::Experience, TileDomain::Constraint,
+            TileDomain::Instinct, TileDomain::Social, TileDomain::Meta,
+            TileDomain::NegativeSpace, TileDomain::Boundary, TileDomain::Diagnostic,
+            TileDomain::Taste, TileDomain::Temporal, TileDomain::Analogy, TileDomain::Autopsy,
+        ];
+        assert_eq!(domains.len(), 13);
+        for d in &domains {
+            let mut t = make_tile("q", "a");
+            t.domain = *d;
+            assert_eq!(t.domain, *d);
+        }
+    }
+
+    #[test]
+    fn test_negative_space_tile_value() {
+        let mut t = make_tile(
+            "What should I NOT do when debugging a memory leak?",
+            "Don't add logging — it makes leaks worse. Use tracemalloc instead."
+        );
+        t.domain = TileDomain::NegativeSpace;
+        t.tags = vec!["python".into(), "debugging".into()];
+        assert!(t.domain.is_extended());
+        assert!(t.matches_tags(&["python"]));
+    }
+
+    #[test]
+    fn test_boundary_tile_value() {
+        let mut t = make_tile(
+            "What goes wrong when migrating dev to prod?",
+            "Environment variables differ. Network latency changes. Data volume increases."
+        );
+        t.domain = TileDomain::Boundary;
+        assert_eq!(t.domain, TileDomain::Boundary);
+    }
+
+    #[test]
+    fn test_temporal_tile_validity() {
+        let validity = TemporalValidity {
+            valid_from: "2026-01".into(),
+            valid_until: Some("2026-07".into()),
+            check_again: "2026-07".into(),
+            half_life_estimate: Some("6 months".into()),
+        };
+        assert_eq!(validity.valid_from, "2026-01");
+        assert!(validity.valid_until.is_some());
     }
 }
