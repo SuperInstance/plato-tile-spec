@@ -1,173 +1,207 @@
-"""Canonical PLATO tile specification."""
-
-from __future__ import annotations
-
-import json
-from dataclasses import asdict, dataclass, field
+"""Tile specification — schema definition, validation rules, type registry, and compatibility checking."""
+import time
+import re
+from dataclasses import dataclass, field
+from typing import Optional, Callable, Any
 from enum import Enum
-from typing import Any
+from collections import defaultdict
 
+class FieldType(Enum):
+    STRING = "string"
+    INTEGER = "integer"
+    FLOAT = "float"
+    BOOLEAN = "boolean"
+    TIMESTAMP = "timestamp"
+    JSON = "json"
+    LIST = "list"
+    ENUM = "enum"
 
-class TileDomain(Enum):
-    """The fourteen canonical PLATO tile domains."""
+class ValidationSeverity(Enum):
+    ERROR = "error"
+    WARNING = "warning"
+    INFO = "info"
 
-    CONSTRAINT_THEORY = "CONSTRAINT_THEORY"
-    TILES = "TILES"
-    GOVERNANCE = "GOVERNANCE"
-    FORGE = "FORGE"
-    FLEET = "FLEET"
-    RESEARCH = "RESEARCH"
-    BOUNDARY = "BOUNDARY"
-    EDGE = "EDGE"
-    MUD = "MUD"
-    NEGATIVE_SPACE = "NEGATIVE_SPACE"
-    META_COGNITION = "META_COGNITION"
-    CROSS_POLLINATION = "CROSS_POLLINATION"
-    SENTIMENT = "SENTIMENT"
-    GENERAL = "GENERAL"
+@dataclass
+class FieldSpec:
+    name: str
+    field_type: FieldType
+    required: bool = False
+    default: Any = None
+    min_value: float = 0.0
+    max_value: float = 0.0
+    pattern: str = ""
+    enum_values: list[str] = field(default_factory=list)
+    description: str = ""
 
+@dataclass
+class ValidationError:
+    field: str
+    message: str
+    severity: ValidationSeverity = ValidationSeverity.ERROR
+    value: Any = None
 
 @dataclass
 class TileSpec:
-    """A single PLATO tile specification.
+    name: str
+    version: str = "1.0.0"
+    description: str = ""
+    domain: str = ""
+    fields: dict[str, FieldSpec] = field(default_factory=dict)
+    required_fields: list[str] = field(default_factory=list)
+    custom_validators: list[str] = field(default_factory=list)
+    created_at: float = field(default_factory=time.time)
+    deprecated: bool = False
+    deprecation_message: str = ""
+    extends: str = ""  # parent spec name
 
-    Attributes:
-        id: Unique tile identifier (non-empty string).
-        content: Human-readable tile content (10–100_000 characters).
-        domain: Canonical domain from :class:`TileDomain`.
-        confidence: Model confidence in the tile, bounded ``[0.0, 1.0]``.
-        priority: Urgency level — one of ``P0``, ``P1``, or ``P2``.
-        tags: Optional categorical labels.
-        provenance: Source or origin description.
-        created_at: Unix timestamp of creation.
-        updated_at: Unix timestamp of last update.
-        usage_count: Number of times the tile has been invoked.
-        success_rate: Fraction of successful invocations ``[0.0, 1.0]``.
-        dependencies: IDs of tiles this tile depends on.
-        version: Monotonically increasing revision number.
-    """
+class SpecRegistry:
+    def __init__(self):
+        self._specs: dict[str, TileSpec] = {}
+        self._validators: dict[str, Callable] = {}
+        self._validation_log: list[dict] = []
 
-    id: str
-    content: str
-    domain: TileDomain
-    confidence: float
-    priority: str
-    tags: list[str] = field(default_factory=list)
-    provenance: str = ""
-    created_at: float = 0.0
-    updated_at: float = 0.0
-    usage_count: int = 0
-    success_rate: float = 0.0
-    dependencies: list[str] = field(default_factory=list)
-    version: int = 1
+    def define(self, name: str, version: str = "1.0.0", description: str = "",
+               domain: str = "", extends: str = "") -> TileSpec:
+        spec = TileSpec(name=name, version=version, description=description,
+                       domain=domain, extends=extends)
+        self._specs[name] = spec
+        return spec
 
+    def add_field(self, spec_name: str, field_name: str, field_type: str = "string",
+                  required: bool = False, default: Any = None, min_value: float = 0.0,
+                  max_value: float = 0.0, pattern: str = "", enum_values: list[str] = None,
+                  description: str = "") -> FieldSpec:
+        spec = self._specs.get(spec_name)
+        if not spec:
+            raise ValueError(f"Spec '{spec_name}' not found")
+        fs = FieldSpec(name=field_name, field_type=FieldType(field_type),
+                      required=required, default=default, min_value=min_value,
+                      max_value=max_value, pattern=pattern,
+                      enum_values=enum_values or [], description=description)
+        spec.fields[field_name] = fs
+        if required:
+            spec.required_fields.append(field_name)
+        return fs
 
-class TileSpecValidator:
-    """Validation and (de)serialization utilities for :class:`TileSpec`."""
+    def register_validator(self, name: str, fn: Callable):
+        self._validators[name] = fn
 
-    _VALID_PRIORITIES = {"P0", "P1", "P2"}
+    def validate(self, spec_name: str, tile: dict) -> list[ValidationError]:
+        spec = self._specs.get(spec_name)
+        if not spec:
+            return [ValidationError("spec", f"Spec '{spec_name}' not found")]
+        if spec.deprecated:
+            return [ValidationError("spec", f"Spec '{spec_name}' is deprecated: {spec.deprecation_message}",
+                                   ValidationSeverity.WARNING)]
+        errors = []
+        # Check required fields
+        for req in spec.required_fields:
+            if req not in tile or tile[req] is None or tile[req] == "":
+                errors.append(ValidationError(req, f"Required field '{req}' is missing"))
 
-    @classmethod
-    def validate(cls, spec: TileSpec) -> tuple[bool, list[str]]:
-        """Validate a ``TileSpec`` against canonical rules.
+        # Check field types and constraints
+        for field_name, field_spec in spec.fields.items():
+            value = tile.get(field_name)
+            if value is None:
+                continue
+            # Type check
+            if field_spec.field_type == FieldType.STRING:
+                if not isinstance(value, str):
+                    errors.append(ValidationError(field_name, f"Expected string, got {type(value).__name__}"))
+                elif field_spec.pattern and not re.match(field_spec.pattern, value):
+                    errors.append(ValidationError(field_name,
+                        f"Value '{value}' does not match pattern '{field_spec.pattern}'"))
+                elif field_spec.max_value > 0 and len(value) > field_spec.max_value:
+                    errors.append(ValidationError(field_name,
+                        f"String length {len(value)} exceeds max {field_spec.max_value}",
+                        ValidationSeverity.WARNING))
+            elif field_spec.field_type == FieldType.INTEGER:
+                if not isinstance(value, int) or isinstance(value, bool):
+                    errors.append(ValidationError(field_name, f"Expected integer, got {type(value).__name__}"))
+                elif field_spec.min_value and value < field_spec.min_value:
+                    errors.append(ValidationError(field_name,
+                        f"Value {value} below minimum {field_spec.min_value}"))
+            elif field_spec.field_type == FieldType.FLOAT:
+                try:
+                    fval = float(value)
+                    if field_spec.min_value and fval < field_spec.min_value:
+                        errors.append(ValidationError(field_name,
+                            f"Value {fval} below minimum {field_spec.min_value}"))
+                except (ValueError, TypeError):
+                    errors.append(ValidationError(field_name, f"Expected float"))
+            elif field_spec.field_type == FieldType.ENUM:
+                if value not in field_spec.enum_values:
+                    errors.append(ValidationError(field_name,
+                        f"Value '{value}' not in allowed values: {field_spec.enum_values}"))
+            elif field_spec.field_type == FieldType.LIST:
+                if not isinstance(value, list):
+                    errors.append(ValidationError(field_name, f"Expected list"))
+                elif field_spec.max_value and len(value) > field_spec.max_value:
+                    errors.append(ValidationError(field_name,
+                        f"List length {len(value)} exceeds max {field_spec.max_value}",
+                        ValidationSeverity.WARNING))
 
-        Args:
-            spec: The tile specification to validate.
+        # Run custom validators
+        for vname in spec.custom_validators:
+            vfn = self._validators.get(vname)
+            if vfn:
+                try:
+                    result = vfn(tile)
+                    if isinstance(result, list):
+                        errors.extend(result)
+                    elif isinstance(result, str):
+                        errors.append(ValidationError("custom", result))
+                except Exception as e:
+                    errors.append(ValidationError(vname, f"Validator error: {e}",
+                                               ValidationSeverity.WARNING))
 
-        Returns:
-            A 2-tuple ``(is_valid, errors)`` where *errors* is a list of human-
-            readable violation messages (empty when *is_valid* is ``True``).
-        """
-        errors: list[str] = []
+        self._validation_log.append({"spec": spec_name, "errors": len(errors),
+                                      "timestamp": time.time()})
+        return errors
 
-        if not isinstance(spec.id, str) or not spec.id.strip():
-            errors.append("id must be a non-empty string.")
+    def check_compatibility(self, spec_a: str, spec_b: str) -> dict:
+        """Check backward compatibility between two spec versions."""
+        sa = self._specs.get(spec_a)
+        sb = self._specs.get(spec_b)
+        if not sa or not sb:
+            return {"compatible": False, "error": "Spec not found"}
+        breaking = []
+        additive = []
+        # Check removed required fields
+        for req in sa.required_fields:
+            if req not in sb.fields:
+                breaking.append(f"Required field '{req}' removed")
+        # Check type changes
+        for fname, fs in sa.fields.items():
+            if fname in sb.fields:
+                if sb.fields[fname].field_type != fs.field_type:
+                    breaking.append(f"Field '{fname}' type changed: {fs.field_type.value} -> {sb.fields[fname].field_type.value}")
+        # Check new required fields
+        for req in sb.required_fields:
+            if req not in sa.fields:
+                breaking.append(f"New required field '{req}' added")
+        # Check new optional fields (additive, not breaking)
+        for fname in sb.fields:
+            if fname not in sa.fields:
+                additive.append(f"New field '{fname}' added")
+        return {"compatible": len(breaking) == 0,
+                "breaking_changes": breaking,
+                "additive_changes": additive}
 
-        if not isinstance(spec.content, str):
-            errors.append("content must be a string.")
-        else:
-            content_len = len(spec.content)
-            if content_len < 10:
-                errors.append(f"content must be at least 10 characters (got {content_len}).")
-            if content_len > 100_000:
-                errors.append(f"content must not exceed 100,000 characters (got {content_len}).")
+    def get_spec(self, name: str) -> Optional[TileSpec]:
+        return self._specs.get(name)
 
-        if not isinstance(spec.domain, TileDomain):
-            errors.append(f"domain must be a TileDomain enum member (got {type(spec.domain).__name__}).")
+    def list_specs(self, domain: str = "") -> list[TileSpec]:
+        specs = list(self._specs.values())
+        if domain:
+            specs = [s for s in specs if s.domain == domain]
+        return specs
 
-        if not isinstance(spec.confidence, (int, float)):
-            errors.append("confidence must be a number.")
-        else:
-            if not 0.0 <= spec.confidence <= 1.0:
-                errors.append(f"confidence must be in [0.0, 1.0] (got {spec.confidence}).")
-
-        if spec.priority not in cls._VALID_PRIORITIES:
-            errors.append(f"priority must be one of {sorted(cls._VALID_PRIORITIES)} (got {spec.priority!r}).")
-
-        return (not errors, errors)
-
-    @classmethod
-    def to_dict(cls, spec: TileSpec) -> dict[str, Any]:
-        """Serialize a ``TileSpec`` to a plain dictionary.
-
-        The *domain* is rendered as its value string for portability.
-        """
-        data = asdict(spec)
-        data["domain"] = spec.domain.value
-        return data
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> TileSpec:
-        """Deserialize a ``TileSpec`` from a dictionary.
-
-        Args:
-            data: Mapping produced by :meth:`to_dict` or equivalent.
-
-        Returns:
-            A fully instantiated ``TileSpec``.
-
-        Raises:
-            KeyError: If a required field is missing.
-            ValueError: If the *domain* or *priority* value is unrecognised.
-        """
-        data = dict(data)  # shallow copy so we can mutate safely
-
-        domain_raw = data.pop("domain")
-        try:
-            domain = TileDomain(domain_raw)
-        except ValueError as exc:
-            raise ValueError(f"Unrecognised TileDomain: {domain_raw!r}") from exc
-
-        # Coerce optional list fields to list[str] if they arrive as something else
-        for list_key in ("tags", "dependencies"):
-            if list_key in data and not isinstance(data[list_key], list):
-                data[list_key] = list(data[list_key])
-
-        return TileSpec(
-            id=data.pop("id"),
-            content=data.pop("content"),
-            domain=domain,
-            confidence=data.pop("confidence"),
-            priority=data.pop("priority"),
-            tags=data.pop("tags", []),
-            provenance=data.pop("provenance", ""),
-            created_at=data.pop("created_at", 0.0),
-            updated_at=data.pop("updated_at", 0.0),
-            usage_count=data.pop("usage_count", 0),
-            success_rate=data.pop("success_rate", 0.0),
-            dependencies=data.pop("dependencies", []),
-            version=data.pop("version", 1),
-        )
-
-    @classmethod
-    def to_json(cls, spec: TileSpec) -> str:
-        """Serialize a ``TileSpec`` to a JSON string."""
-        return json.dumps(cls.to_dict(spec), ensure_ascii=False)
-
-    @classmethod
-    def from_json(cls, raw: str) -> TileSpec:
-        """Deserialize a ``TileSpec`` from a JSON string."""
-        data = json.loads(raw)
-        if not isinstance(data, dict):
-            raise ValueError("JSON payload must decode to a JSON object.")
-        return cls.from_dict(data)
+    @property
+    def stats(self) -> dict:
+        domains = {}
+        for s in self._specs.values():
+            domains[s.domain or "general"] = domains.get(s.domain or "general", 0) + 1
+        return {"specs": len(self._specs), "validators": len(self._validators),
+                "validations": len(self._validation_log),
+                "domains": domains, "deprecated": sum(1 for s in self._specs.values() if s.deprecated)}
