@@ -11,7 +11,7 @@ from typing import Any
 class TileDomain(Enum):
     """The fourteen canonical PLATO tile domains."""
 
-    CONTRAINT_THEORY = "CONTRAINT_THEORY"
+    CONSTRAINT_THEORY = "CONSTRAINT_THEORY"
     TILES = "TILES"
     GOVERNANCE = "GOVERNANCE"
     FORGE = "FORGE"
