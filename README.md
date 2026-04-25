@@ -1,62 +1,37 @@
 # plato-tile-spec
 
-Canonical tile format for the PLATO ecosystem. 14 domain types, validation schema, and (de)serialization.
+Canonical tile format — TileSpec, TileDomain (14 types), validation schema.
 
-## Install
+The lingua franca of the PLATO knowledge system. Every piece of knowledge in the fleet is expressed as a TileSpec — a structured question-answer pair with metadata.
+
+## TileSpec Format
+
+```python
+{
+    "domain": "fleet_orchestration",  # PLATO room
+    "question": "How do agents coordinate?",
+    "answer": "Via Bottle Protocol...",
+    "confidence": 0.85,  # 0-1 quality score
+    "source": "oracle1",  # originating agent
+    "timestamp": "2026-04-24T20:11:00Z",
+    "hash": "sha256:..."  # content hash for dedup
+}
+```
+
+## 14 Tile Domains
+
+fleet, neural, architecture, security, grammar, arena, mud, theory, research, context, training, evaluation, constraint_theory, general
+
+## Installation
 
 ```bash
 pip install plato-tile-spec
 ```
 
-## Usage
+## Part of the Cocapn Fleet
 
-```python
-from plato_tile_spec.spec import TileSpec, TileDomain, TileSpecValidator
+The foundational format that all PLATO components read and write.
 
-# Create a tile
-tile = TileSpec(
-    id="tile-001",
-    content="Aggressive play in late position with strong hole cards yields positive EV.",
-    domain=TileDomain.FLEET,
-    confidence=0.87,
-    priority="P1",
-    tags=["poker", "strategy", "position"],
-    provenance="reinforce-room/poker-sim",
-)
+## License
 
-# Validate
-valid, errors = TileSpecValidator.validate(tile)
-assert valid, errors
-
-# Serialize
-json_str = TileSpecValidator.to_json(tile)
-restored = TileSpecValidator.from_json(json_str)
-assert restored.id == tile.id
-```
-
-## Domains
-
-| Domain | Purpose |
-|--------|---------|
-| `CONSTRAINT_THEORY` | Geometric constraint solving |
-| `TILES` | Tile metadata and indexing |
-| `GOVERNANCE` | Policy and access control |
-| `FORGE` | Training and fine-tuning |
-| `FLEET` | Multi-agent coordination |
-| `RESEARCH` | Research notes and findings |
-| `BOUNDARY` | System boundary definitions |
-| `EDGE` | Edge computing and deployment |
-| `MUD` | Multi-user domain interactions |
-| `NEGATIVE_SPACE` | Anti-patterns and failure modes |
-| `META_COGNITION` | Self-awareness and reflection |
-| `CROSS_POLLINATION` | Cross-domain knowledge transfer |
-| `SENTIMENT` | Room and agent sentiment |
-| `GENERAL` | Default catch-all |
-
-## API
-
-- `TileSpecValidator.validate(spec)` → `(bool, list[str])`
-- `TileSpecValidator.to_dict(spec)` → `dict`
-- `TileSpecValidator.from_dict(data)` → `TileSpec`
-- `TileSpecValidator.to_json(spec)` → `str`
-- `TileSpecValidator.from_json(raw)` → `TileSpec`
+MIT
