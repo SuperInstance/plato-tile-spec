@@ -1,5 +1,8 @@
 # plato-tile-spec
 
+[![PyPI](https://img.shields.io/pypi/v/plato-tile-spec)](https://pypi.org/project/plato-tile-spec/) [![Python](https://img.shields.io/pypi/pyversions/plato-tile-spec)](https://pypi.org/project/plato-tile-spec/) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+
 Canonical tile format — TileSpec, TileDomain (14 types), validation schema.
 
 The lingua franca of the PLATO knowledge system. Every piece of knowledge in the fleet is expressed as a TileSpec — a structured question-answer pair with metadata.
